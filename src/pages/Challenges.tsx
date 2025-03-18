@@ -170,7 +170,10 @@ const Challenges = () => {
                   <p className="text-gray-500">Join a challenge to get started!</p>
                   <Button 
                     className="mt-4 bg-stepcoin-primary hover:bg-stepcoin-primary/90"
-                    onClick={() => document.querySelector('[data-value="available"]')?.click()}
+                    onClick={() => {
+                      const availableTab = document.querySelector('[data-value="available"]') as HTMLElement;
+                      if (availableTab) availableTab.click();
+                    }}
                   >
                     Browse Challenges
                   </Button>
