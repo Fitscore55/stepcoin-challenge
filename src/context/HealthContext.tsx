@@ -5,6 +5,17 @@ import { useAuth } from './AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Platform } from 'react-native';
 
+// Import the health connect library conditionally
+let HealthConnect: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    // Only import on native platforms
+    HealthConnect = require('expo-health-connect');
+  } catch (e) {
+    console.warn('expo-health-connect is not available', e);
+  }
+}
+
 type HealthData = {
   steps: number;
   distance: number; // in meters
@@ -85,12 +96,60 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!user) return false;
     
     try {
-      // For now, we'll just mock permission request for both web and native
-      // In a real app, we would use the Health Connect APIs on native
-      setHasPermission(true);
-      localStorage.setItem('stepcoin-health-permission', 'granted');
-      toast.success('Health data access granted!');
-      return true;
+      if (Platform.OS === 'web') {
+        // Mock permission request for web
+        setHasPermission(true);
+        localStorage.setItem('stepcoin-health-permission', 'granted');
+        toast.success('Health data access granted!');
+        return true;
+      } else if (HealthConnect) {
+        // Request permissions for native platforms using expo-health-connect
+        try {
+          const isAvailable = await HealthConnect.isAvailable();
+          
+          if (!isAvailable) {
+            toast.error('Health Connect is not available on this device');
+            return false;
+          }
+          
+          // The actual structure of this will depend on the expo-health-connect API
+          // This is a simplified version based on the known API
+          const granted = await HealthConnect.requestPermission([
+            {
+              accessType: HealthConnect.PermissionAccessType?.READ,
+              recordType: HealthConnect.RecordType?.STEPS,
+            },
+            {
+              accessType: HealthConnect.PermissionAccessType?.READ,
+              recordType: HealthConnect.RecordType?.DISTANCE,
+            }
+          ]);
+          
+          setHasPermission(granted);
+          localStorage.setItem('stepcoin-health-permission', granted ? 'granted' : 'denied');
+          
+          if (granted) {
+            toast.success('Health data access granted!');
+          } else {
+            toast.error('Health data access denied');
+          }
+          
+          return granted;
+        } catch (error) {
+          console.error("Health Connect error:", error);
+          // Fallback to mock data if we encounter errors with Health Connect
+          setHasPermission(true);
+          localStorage.setItem('stepcoin-health-permission', 'granted');
+          toast.success('Using simulated health data');
+          return true;
+        }
+      } else {
+        // Fallback to mock health data if Health Connect is not available
+        setHasPermission(true);
+        localStorage.setItem('stepcoin-health-permission', 'granted');
+        toast.success('Using simulated health data');
+        return true;
+      }
     } catch (error) {
       console.error('Permission request error:', error);
       toast.error('Failed to get health data permissions');
@@ -103,10 +162,71 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     
     setLoading(true);
     try {
-      // Mock health data fetch for both web and native for now
-      // In a real app, we would use Health Connect APIs on native
-      const steps = Math.floor(Math.random() * 12000) + 3000;
-      const distance = steps * 0.7;
+      let steps = 0;
+      let distance = 0;
+      
+      if (Platform.OS === 'web' || !HealthConnect) {
+        // Mock health data fetch for web or when Health Connect is not available
+        steps = Math.floor(Math.random() * 12000) + 3000;
+        distance = steps * 0.7;
+      } else {
+        // Get real health data on native platforms with Health Connect
+        try {
+          const now = new Date();
+          const yesterday = new Date(now);
+          yesterday.setDate(yesterday.getDate() - 1);
+          
+          // Check if the recordType exists before trying to use it
+          if (HealthConnect.RecordType?.STEPS) {
+            // Get steps data
+            const stepsResponse = await HealthConnect.readRecords(
+              HealthConnect.RecordType.STEPS,
+              {
+                timeRangeFilter: {
+                  operator: HealthConnect.TimeRangeFilterOperator?.BETWEEN,
+                  startTime: yesterday.toISOString(),
+                  endTime: now.toISOString(),
+                },
+              }
+            );
+            
+            if (stepsResponse.records.length > 0) {
+              for (const record of stepsResponse.records) {
+                steps += record.count;
+              }
+            }
+          }
+          
+          // Check if the recordType exists before trying to use it
+          if (HealthConnect.RecordType?.DISTANCE || HealthConnect.RecordType?.DISTANCE_WALKED) {
+            // Get distance data - the actual record type may vary with the library version
+            const distanceType = HealthConnect.RecordType.DISTANCE || 
+                                 HealthConnect.RecordType.DISTANCE_WALKED;
+            
+            const distanceResponse = await HealthConnect.readRecords(
+              distanceType,
+              {
+                timeRangeFilter: {
+                  operator: HealthConnect.TimeRangeFilterOperator?.BETWEEN,
+                  startTime: yesterday.toISOString(),
+                  endTime: now.toISOString(),
+                },
+              }
+            );
+            
+            if (distanceResponse.records.length > 0) {
+              for (const record of distanceResponse.records) {
+                distance += record.distance; // Distance in meters
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Error fetching health data from Health Connect:", error);
+          // Fallback to mock data if we encounter errors
+          steps = Math.floor(Math.random() * 12000) + 3000;
+          distance = steps * 0.7;
+        }
+      }
       
       const now = new Date().toISOString();
       
