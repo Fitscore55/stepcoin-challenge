@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from './AuthContext';
 import { useHealth } from './HealthContext';
+import { supabase } from '@/integrations/supabase/client';
 
 type Wallet = {
   coins: number;
@@ -44,37 +45,11 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [fitnessScore, setFitnessScore] = useState(0);
   const [previousSteps, setPreviousSteps] = useState(0);
 
+  // Fetch wallet data when user changes
   useEffect(() => {
     if (user) {
-      // Load wallet data from localStorage
-      const storedWallet = localStorage.getItem(`stepcoin-wallet-${user.id}`);
-      if (storedWallet) {
-        try {
-          setWallet(JSON.parse(storedWallet));
-        } catch (error) {
-          console.error('Failed to parse stored wallet:', error);
-        }
-      }
-
-      // Load transactions from localStorage
-      const storedTransactions = localStorage.getItem(`stepcoin-transactions-${user.id}`);
-      if (storedTransactions) {
-        try {
-          setTransactions(JSON.parse(storedTransactions));
-        } catch (error) {
-          console.error('Failed to parse stored transactions:', error);
-        }
-      }
-
-      // Load previous steps count
-      const storedPreviousSteps = localStorage.getItem(`stepcoin-previous-steps-${user.id}`);
-      if (storedPreviousSteps) {
-        try {
-          setPreviousSteps(JSON.parse(storedPreviousSteps));
-        } catch (error) {
-          console.error('Failed to parse stored previous steps:', error);
-        }
-      }
+      fetchWalletData();
+      fetchTransactions();
     } else {
       // Reset state when user logs out
       setWallet(defaultWallet);
@@ -83,6 +58,123 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setFitnessScore(0);
     }
   }, [user]);
+
+  // Fetch previous steps
+  useEffect(() => {
+    if (user) {
+      const fetchPreviousSteps = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('health_data')
+            .select('steps')
+            .eq('user_id', user.id)
+            .order('last_synced', { ascending: false })
+            .limit(1)
+            .single();
+            
+          if (error && error.code !== 'PGRST116') {
+            console.error('Error fetching previous steps:', error);
+            return;
+          }
+          
+          if (data) {
+            setPreviousSteps(data.steps);
+          }
+        } catch (error) {
+          console.error('Failed to fetch previous steps:', error);
+        }
+      };
+      
+      fetchPreviousSteps();
+    }
+  }, [user]);
+
+  // Update wallet when health data changes
+  useEffect(() => {
+    if (lastUpdate && user) {
+      updateWallet();
+    }
+  }, [lastUpdate, user]);
+
+  const fetchWalletData = async () => {
+    if (!user) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('wallets')
+        .select('*')
+        .eq('user_id', user.id)
+        .single();
+        
+      if (error) {
+        if (error.code === 'PGRST116') {
+          // No wallet found, create one
+          const { data: newWallet, error: createError } = await supabase
+            .from('wallets')
+            .insert({
+              user_id: user.id,
+              coins: 0,
+              total_earned: 0,
+              steps_counted: 0,
+              last_updated: new Date().toISOString()
+            })
+            .select()
+            .single();
+            
+          if (createError) throw createError;
+          
+          if (newWallet) {
+            setWallet({
+              coins: newWallet.coins,
+              lastUpdated: newWallet.last_updated,
+              totalEarned: newWallet.total_earned,
+              stepsCounted: newWallet.steps_counted
+            });
+          }
+        } else {
+          throw error;
+        }
+      } else if (data) {
+        setWallet({
+          coins: data.coins,
+          lastUpdated: data.last_updated,
+          totalEarned: data.total_earned,
+          stepsCounted: data.steps_counted
+        });
+      }
+    } catch (error) {
+      console.error('Failed to fetch wallet data:', error);
+    }
+  };
+
+  const fetchTransactions = async () => {
+    if (!user) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+        
+      if (error) throw error;
+      
+      if (data) {
+        const formattedTransactions: Transaction[] = data.map(t => ({
+          id: t.id,
+          amount: t.amount,
+          description: t.description,
+          timestamp: t.created_at,
+          type: t.type as 'earned' | 'spent'
+        }));
+        
+        setTransactions(formattedTransactions);
+      }
+    } catch (error) {
+      console.error('Failed to fetch transactions:', error);
+    }
+  };
 
   // Calculate fitness score
   useEffect(() => {
@@ -94,13 +186,6 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setFitnessScore(newScore);
     }
   }, [user, wallet, transactions]);
-
-  // Update wallet when health data changes
-  useEffect(() => {
-    if (lastUpdate && user) {
-      updateWallet();
-    }
-  }, [lastUpdate, user]);
 
   const updateWallet = async () => {
     if (!user) return;
@@ -124,33 +209,46 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             stepsCounted: wallet.stepsCounted + newSteps,
           };
           
-          // Create transaction record
-          const newTransaction: Transaction = {
-            id: Date.now().toString(),
-            amount: coinsEarned,
-            description: `Earned for ${newSteps} steps`,
-            timestamp: now,
-            type: 'earned',
-          };
+          // Update wallet in Supabase
+          const { error: walletError } = await supabase
+            .from('wallets')
+            .update({
+              coins: updatedWallet.coins,
+              total_earned: updatedWallet.totalEarned,
+              steps_counted: updatedWallet.stepsCounted,
+              last_updated: now
+            })
+            .eq('user_id', user.id);
+            
+          if (walletError) throw walletError;
           
-          const updatedTransactions = [newTransaction, ...transactions];
+          // Create transaction record
+          const { error: transactionError } = await supabase
+            .from('transactions')
+            .insert({
+              user_id: user.id,
+              amount: coinsEarned,
+              description: `Earned for ${newSteps} steps`,
+              type: 'earned'
+            });
+            
+          if (transactionError) throw transactionError;
+          
+          // Update previous steps
+          setPreviousSteps(healthData.steps);
           
           // Update state
           setWallet(updatedWallet);
-          setTransactions(updatedTransactions);
-          setPreviousSteps(healthData.steps);
           
-          // Save to localStorage
-          localStorage.setItem(`stepcoin-wallet-${user.id}`, JSON.stringify(updatedWallet));
-          localStorage.setItem(`stepcoin-transactions-${user.id}`, JSON.stringify(updatedTransactions));
-          localStorage.setItem(`stepcoin-previous-steps-${user.id}`, JSON.stringify(healthData.steps));
+          // Refresh transactions
+          fetchTransactions();
           
           toast.success(`Earned ${coinsEarned} coins for your steps!`);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Wallet update error:', error);
-      toast.error('Failed to update wallet');
+      toast.error(error.message || 'Failed to update wallet');
     }
   };
 
@@ -165,37 +263,44 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       
       const now = new Date().toISOString();
       
-      // Update wallet
-      const updatedWallet = {
+      // Update wallet in Supabase
+      const { error: walletError } = await supabase
+        .from('wallets')
+        .update({
+          coins: wallet.coins - amount,
+          last_updated: now
+        })
+        .eq('user_id', user.id);
+        
+      if (walletError) throw walletError;
+      
+      // Create transaction record
+      const { error: transactionError } = await supabase
+        .from('transactions')
+        .insert({
+          user_id: user.id,
+          amount: amount,
+          description,
+          type: 'spent'
+        });
+        
+      if (transactionError) throw transactionError;
+      
+      // Update state
+      setWallet({
         ...wallet,
         coins: wallet.coins - amount,
         lastUpdated: now,
-      };
+      });
       
-      // Create transaction record
-      const newTransaction: Transaction = {
-        id: Date.now().toString(),
-        amount: amount,
-        description,
-        timestamp: now,
-        type: 'spent',
-      };
-      
-      const updatedTransactions = [newTransaction, ...transactions];
-      
-      // Update state
-      setWallet(updatedWallet);
-      setTransactions(updatedTransactions);
-      
-      // Save to localStorage
-      localStorage.setItem(`stepcoin-wallet-${user.id}`, JSON.stringify(updatedWallet));
-      localStorage.setItem(`stepcoin-transactions-${user.id}`, JSON.stringify(updatedTransactions));
+      // Refresh transactions
+      fetchTransactions();
       
       toast.success(`Spent ${amount} coins`);
       return true;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Spend coins error:', error);
-      toast.error('Failed to spend coins');
+      toast.error(error.message || 'Failed to spend coins');
       return false;
     }
   };

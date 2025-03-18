@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from './AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 
 type HealthData = {
   steps: number;
@@ -39,14 +40,7 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const storedPermission = localStorage.getItem('stepcoin-health-permission');
       if (storedPermission === 'granted') {
         setHasPermission(true);
-        const storedData = localStorage.getItem(`stepcoin-health-data-${user.id}`);
-        if (storedData) {
-          try {
-            setHealthData(JSON.parse(storedData));
-          } catch (error) {
-            console.error('Failed to parse stored health data:', error);
-          }
-        }
+        fetchHealthData();
       }
     } else {
       // Reset state when user logs out
@@ -55,7 +49,40 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [user]);
 
+  const fetchHealthData = async () => {
+    if (!user) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('health_data')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('last_synced', { ascending: false })
+        .limit(1)
+        .single();
+        
+      if (error && error.code !== 'PGRST116') {
+        // PGRST116 means no data found, which is expected for new users
+        console.error('Error fetching health data:', error);
+        return;
+      }
+      
+      if (data) {
+        setHealthData({
+          steps: data.steps,
+          distance: data.distance,
+          lastSynced: data.last_synced,
+        });
+        setLastUpdate(data.last_synced);
+      }
+    } catch (error) {
+      console.error('Failed to fetch health data:', error);
+    }
+  };
+
   const requestPermission = async (): Promise<boolean> => {
+    if (!user) return false;
+    
     try {
       // Mock permission request - will be replaced with Health Connect API
       setHasPermission(true);
@@ -87,14 +114,25 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         lastSynced: now,
       };
       
+      // Save to Supabase
+      const { error } = await supabase
+        .from('health_data')
+        .insert({
+          user_id: user.id,
+          steps: mockSteps,
+          distance: mockDistance,
+          last_synced: now
+        });
+        
+      if (error) throw error;
+      
       setHealthData(newHealthData);
       setLastUpdate(now);
-      localStorage.setItem(`stepcoin-health-data-${user.id}`, JSON.stringify(newHealthData));
       
       toast.success('Health data synced successfully!');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Health data sync error:', error);
-      toast.error('Failed to sync health data');
+      toast.error(error.message || 'Failed to sync health data');
     } finally {
       setLoading(false);
     }
