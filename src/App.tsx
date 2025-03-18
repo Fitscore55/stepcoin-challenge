@@ -66,11 +66,7 @@ const AppContent = () => {
   } else {
     // For native platforms, simply render the current screen based on navigation state
     // This will be replaced with Expo Router in a future update
-    return (
-      <Layout>
-        <Dashboard />
-      </Layout>
-    );
+    return <Layout />;
   }
 };
 
