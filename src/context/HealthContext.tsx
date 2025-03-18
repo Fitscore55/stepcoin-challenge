@@ -3,6 +3,8 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from './AuthContext';
 import { supabase } from '@/integrations/supabase/client';
+import * as HealthConnect from 'expo-health-connect';
+import { Platform } from 'react-native';
 
 type HealthData = {
   steps: number;
@@ -84,11 +86,43 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!user) return false;
     
     try {
-      // Mock permission request - will be replaced with Health Connect API
-      setHasPermission(true);
-      localStorage.setItem('stepcoin-health-permission', 'granted');
-      toast.success('Health data access granted!');
-      return true;
+      if (Platform.OS === 'web') {
+        // Mock permission request for web
+        setHasPermission(true);
+        localStorage.setItem('stepcoin-health-permission', 'granted');
+        toast.success('Health data access granted!');
+        return true;
+      } else {
+        // Request permissions for native platforms
+        const isAvailable = await HealthConnect.isAvailable();
+        
+        if (!isAvailable) {
+          toast.error('Health Connect is not available on this device');
+          return false;
+        }
+        
+        const granted = await HealthConnect.requestPermission([
+          {
+            accessType: HealthConnect.PermissionAccessType.READ,
+            recordType: HealthConnect.RecordType.STEPS,
+          },
+          {
+            accessType: HealthConnect.PermissionAccessType.READ,
+            recordType: HealthConnect.RecordType.DISTANCE_WALKED,
+          }
+        ]);
+        
+        setHasPermission(granted);
+        localStorage.setItem('stepcoin-health-permission', granted ? 'granted' : 'denied');
+        
+        if (granted) {
+          toast.success('Health data access granted!');
+        } else {
+          toast.error('Health data access denied');
+        }
+        
+        return granted;
+      }
     } catch (error) {
       console.error('Permission request error:', error);
       toast.error('Failed to get health data permissions');
@@ -101,16 +135,61 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     
     setLoading(true);
     try {
-      // Mock health data fetch - will be replaced with Health Connect API
-      // Generate random steps between 3000-15000 for demo
-      const mockSteps = Math.floor(Math.random() * 12000) + 3000;
-      // Average step is about 0.7m, so we calculate a realistic distance
-      const mockDistance = mockSteps * 0.7;
+      let steps = 0;
+      let distance = 0;
+      
+      if (Platform.OS === 'web') {
+        // Mock health data fetch for web
+        steps = Math.floor(Math.random() * 12000) + 3000;
+        distance = steps * 0.7;
+      } else {
+        // Get real health data on native platforms
+        const now = new Date();
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        // Get steps data
+        const stepsResponse = await HealthConnect.readRecords(
+          HealthConnect.RecordType.STEPS,
+          {
+            timeRangeFilter: {
+              operator: HealthConnect.TimeRangeFilterOperator.BETWEEN,
+              startTime: yesterday.toISOString(),
+              endTime: now.toISOString(),
+            },
+          }
+        );
+        
+        if (stepsResponse.records.length > 0) {
+          for (const record of stepsResponse.records) {
+            steps += record.count;
+          }
+        }
+        
+        // Get distance data
+        const distanceResponse = await HealthConnect.readRecords(
+          HealthConnect.RecordType.DISTANCE_WALKED,
+          {
+            timeRangeFilter: {
+              operator: HealthConnect.TimeRangeFilterOperator.BETWEEN,
+              startTime: yesterday.toISOString(),
+              endTime: now.toISOString(),
+            },
+          }
+        );
+        
+        if (distanceResponse.records.length > 0) {
+          for (const record of distanceResponse.records) {
+            distance += record.distance; // Distance in meters
+          }
+        }
+      }
+      
       const now = new Date().toISOString();
       
       const newHealthData = {
-        steps: mockSteps,
-        distance: mockDistance,
+        steps: steps,
+        distance: distance,
         lastSynced: now,
       };
       
@@ -119,8 +198,8 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         .from('health_data')
         .insert({
           user_id: user.id,
-          steps: mockSteps,
-          distance: mockDistance,
+          steps: steps,
+          distance: distance,
           last_synced: now
         });
         

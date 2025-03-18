@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { HealthProvider } from "./context/HealthContext";
 import { WalletProvider } from "./context/WalletContext";
 import { ChallengeProvider } from "./context/ChallengeContext";
+import { Platform } from "react-native";
 
 import Index from "./pages/Index";
 import Login from "./pages/Login";
@@ -36,6 +37,43 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
+// Use different routing for web vs native
+const AppContent = () => {
+  // For web platform, use React Router
+  if (Platform.OS === 'web') {
+    return (
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Index />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<SignUp />} />
+          
+          <Route path="/app" element={
+            <ProtectedRoute>
+              <Layout />
+            </ProtectedRoute>
+          }>
+            <Route index element={<Dashboard />} />
+            <Route path="challenges" element={<Challenges />} />
+            <Route path="wallet" element={<Wallet />} />
+            <Route path="profile" element={<Profile />} />
+          </Route>
+          
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </BrowserRouter>
+    );
+  } else {
+    // For native platforms, simply render the current screen based on navigation state
+    // This will be replaced with Expo Router in a future update
+    return (
+      <Layout>
+        <Dashboard />
+      </Layout>
+    );
+  }
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -45,26 +83,7 @@ const App = () => (
             <ChallengeProvider>
               <Toaster />
               <Sonner />
-              <BrowserRouter>
-                <Routes>
-                  <Route path="/" element={<Index />} />
-                  <Route path="/login" element={<Login />} />
-                  <Route path="/signup" element={<SignUp />} />
-                  
-                  <Route path="/app" element={
-                    <ProtectedRoute>
-                      <Layout />
-                    </ProtectedRoute>
-                  }>
-                    <Route index element={<Dashboard />} />
-                    <Route path="challenges" element={<Challenges />} />
-                    <Route path="wallet" element={<Wallet />} />
-                    <Route path="profile" element={<Profile />} />
-                  </Route>
-                  
-                  <Route path="*" element={<NotFound />} />
-                </Routes>
-              </BrowserRouter>
+              <AppContent />
             </ChallengeProvider>
           </WalletProvider>
         </HealthProvider>
